@@ -1,0 +1,290 @@
+/* inotify-watch.c -- Watches for events on specified files and directories and
+ *                 -- logs them. This only works on Linux because it uses
+ *                 -- inotify.
+ *  by Daniel Roberson @dmfroberson
+ *
+ *
+ * The Linux Programming Interface book helped a lot with this!!!
+ *
+ * TODO:
+ * - fork()
+ * - list of files to watch
+ * - PID file/PID file script
+ * - syslog()
+ */
+
+#include <sys/inotify.h>
+#include <sys/types.h>
+#include <limits.h>
+#include <stdio.h>
+#include <stdarg.h>
+#include <syslog.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+#include <errno.h>
+#include <time.h>
+
+#include "inotify-watch.h"
+
+
+#define BUF_LEN (10 * (sizeof(struct inotify_event) + NAME_MAX + 1))
+
+
+/* inotify_t structure
+ * wd - watch descriptor
+ * filename - self-explanatory
+ */
+typedef struct inotifyEntry {
+  int wd;
+  char filename[BUF_LEN];
+  struct inotifyEntry *next;
+} inotify_t;
+
+
+/* Globals */
+int daemonize = 0;
+int use_syslog = 0;
+inotify_t *head = NULL;
+char *logfile = LOGFILE;
+char *pidfile = PIDFILE;
+char *configfile = CONFIGFILE;
+
+/* log_entry() -- adds log entry
+ *             -- displays to stdout/stderr if not daemonized
+ *             -- returns 0 on success, 1 on failure
+ */
+int log_entry(const char *fmt, ...) {
+  int n;
+  FILE *fp;
+  va_list va;
+  char buf[1024];
+  char *timestr;
+  time_t t;
+
+
+  /* print timestamp */
+  time(&t);
+  timestr = strtok(ctime(&t), "\n");
+
+  va_start(va, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, va);
+  va_end(va);
+
+  if (use_syslog)
+    syslog(LOG_INFO, "[%s] %s", timestr, buf);
+
+  if ((fp = fopen(logfile, "a+")) == NULL) {
+    fprintf (stderr, "Unable to open logfile %s: %s\n",
+	     logfile,
+	     strerror(errno));
+    return 1;
+  }
+
+  fprintf(fp, "[%s] %s\n", timestr, buf);
+
+  if (daemonize == 0)
+    printf("[%s] %s\n", timestr, buf);
+
+  fclose(fp);
+  return 0;
+}
+
+/* displayInotifyEvent() -- output inotify event in human-readable form
+ *
+ * TODO: cleaner way of doing this than a bunch of strncat()!!
+ */
+void displayInotifyEvent(struct inotify_event *i, inotify_t *head) {
+  char buf[1024];
+  char int2str[32];
+  inotify_t *current = head;
+
+
+  /* print filename */
+  while(current->wd != i->wd)
+    current = current->next;
+
+  /* log_entry("%s", current->filename); */
+  snprintf(buf, sizeof(buf), "%s", current->filename);
+
+  if (i->len > 0) {
+    strncat(buf, "/", sizeof(buf));
+    strncat(buf, i->name, sizeof(buf));
+  }
+
+  strncat(buf, "; ", sizeof(buf));
+
+  /* print watch descriptor */
+  strncat(buf, "wd =", sizeof(buf));
+  snprintf(int2str, sizeof(int2str), "%2d", i->wd);
+  strncat(buf, int2str, sizeof(buf));
+  strncat(buf, "; ", sizeof(buf));
+
+  if (i->cookie > 0) {
+    strncat(buf, "cookie =", sizeof(buf));
+    snprintf(int2str, sizeof(int2str), "%4d", i->cookie);
+    strncat(buf, int2str, sizeof(buf));
+    strncat(buf, "; ", sizeof(buf));
+  }
+
+  /* print event type */
+  if (i->mask & IN_ACCESS)        strncat(buf, "IN_ACCESS", sizeof(buf));
+  if (i->mask & IN_ATTRIB)        strncat(buf, "IN_ATTRIB", sizeof(buf));
+  if (i->mask & IN_CLOSE_NOWRITE) strncat(buf, "IN_CLOSE_NOWRITE", sizeof(buf));
+  if (i->mask & IN_CLOSE_WRITE)   strncat(buf, "IN_CLOSE_WRITE", sizeof(buf));
+  if (i->mask & IN_CREATE)        strncat(buf, "IN_CREATE", sizeof(buf));
+  if (i->mask & IN_DELETE)        strncat(buf, "IN_DELETE", sizeof(buf));
+  if (i->mask & IN_DELETE_SELF)   strncat(buf, "IN_DELETE_SELF", sizeof(buf));
+  if (i->mask & IN_IGNORED)       strncat(buf, "IN_IGNORED", sizeof(buf));
+  if (i->mask & IN_ISDIR)         strncat(buf, "IN_ISDIR", sizeof(buf));
+  if (i->mask & IN_MODIFY)        strncat(buf, "IN_MODIFY", sizeof(buf));
+  if (i->mask & IN_MOVE_SELF)     strncat(buf, "IN_MOVE_SELF", sizeof(buf));
+  if (i->mask & IN_MOVED_FROM)    strncat(buf, "IN_MOVED_FROM", sizeof(buf));
+  if (i->mask & IN_MOVED_TO)      strncat(buf, "IN_MOVED_TO", sizeof(buf));
+  if (i->mask & IN_OPEN)          strncat(buf, "IN_OPEN", sizeof(buf));
+  if (i->mask & IN_Q_OVERFLOW)    strncat(buf, "IN_Q_OVERFLOW", sizeof(buf));
+  if (i->mask & IN_UNMOUNT)       strncat(buf, "IN_UNMOUNT", sizeof(buf));
+  
+  log_entry("%s", buf);
+}
+
+
+/* addInotifyEntry -- adds wd/filename pair to linked list for future reference
+ */
+void addInotifyEntry(int wd, char *filename) {
+  inotify_t *link = (inotify_t*)malloc(sizeof(inotify_t));
+
+  link->wd = wd;
+  strncpy(link->filename, filename, sizeof(link->filename));
+
+  link->next = head;
+  head = link;
+}
+
+/* writePidFile() -- writes pid file!
+ */
+void writePidFile(char *path, pid_t pid) {
+  FILE *fp;
+
+  fp = fopen(path, "w");
+  if (fp == NULL) {
+    log_entry("FATAL: Unable to open PID file %s: %s\n", path, strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  fprintf(fp, "%d", pid);
+  fclose(fp);
+}
+
+
+/* usage() -- print usage/help menu
+ */
+void usage(const char *progname) {
+  fprintf(stderr, "print usage");
+
+  exit(EXIT_FAILURE);
+}
+
+
+/* addInotifyFiles() -- read filenames from config file and add to inotify
+ */
+void addInotifyFiles(int fd, const char *path) {
+  int wd;
+  FILE *fp;
+  char hmm[BUF_LEN];
+
+
+  fp = fopen(path, "r");
+  if (fp == NULL) {
+    log_entry("FATAL: Unable to open config file %s: %s\n",
+	      path,
+	      strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  while (fgets(hmm, sizeof(hmm), fp) != NULL) {
+    hmm[strcspn(hmm, "\n")] = '\0';
+    if (strlen(hmm) == 0)
+      continue;
+
+    wd = inotify_add_watch(fd, hmm, IN_ALL_EVENTS);
+    if (wd == -1) {
+      fprintf(stderr, "inotify_add_watch %s: %s\n", hmm, strerror(errno));
+    }
+    printf("adding %s %d\n", hmm, wd);
+    addInotifyEntry(wd, hmm);
+  }
+
+  fclose(fp);
+}
+
+
+/* main() -- entry point of this program
+ */
+int main(int argc, char *argv[]) {
+  int fd;
+  int wd;
+  int i;
+  int opt;
+  size_t num;
+  char buf[BUF_LEN];
+  char *p;
+  struct inotify_event *event;
+
+
+  while ((opt = getopt(argc, argv, "h?sl:f:p:d")) != -1) {
+    switch (opt) {
+    case 'f': /* config file */
+      configfile = optarg;
+      break;
+
+    case 'l': /* log file */
+      logfile = optarg;
+      break;
+
+    case 'p': /* pid file */
+      pidfile = optarg;
+      break;
+
+    case 's': /* toggle syslog */
+      use_syslog = use_syslog ? 0 : 1;
+      break;
+
+    case 'd': /* daemonize */
+      daemonize = daemonize ? 0 : 1;
+      break;
+ 
+    case '?': /* usage */
+    case 'h':
+      usage(argv[0]);
+      
+    default:
+      usage(argv[0]);
+    }
+  }
+
+  fd = inotify_init();
+  if (fd == -1) {
+    fprintf(stderr, "inotify_init() error: %s\n", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  addInotifyFiles(fd, configfile);
+
+  for(;;) {
+    num = read(fd, buf, BUF_LEN);
+    if (num == 0 || num == -1) {
+      log_entry("read() on inotify fd: %s\n", strerror(errno));
+      exit(EXIT_FAILURE);
+    }
+
+    for (p = buf; p < buf + num;) {
+      event = (struct inotify_event *) p;
+      displayInotifyEvent(event, head);
+
+      p += sizeof(struct inotify_event) + event->len;
+    }
+  }
+
+  return EXIT_SUCCESS;
+}
