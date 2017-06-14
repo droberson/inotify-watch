@@ -271,7 +271,7 @@ int main(int argc, char *argv[]) {
 	   getpid());
   }
 
-  log_entry("inotify-watch %s by %s started. PID %d\n",
+  log_entry("inotify-watch %s by %s started. PID %d",
 	    VERSION,
 	    AUTHOR,
 	    getpid());
