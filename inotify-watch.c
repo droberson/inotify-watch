@@ -89,8 +89,6 @@ int log_entry(const char *fmt, ...) {
 }
 
 /* displayInotifyEvent() -- output inotify event in human-readable form
- *
- * TODO: cleaner way of doing this than a bunch of strncat()!!
  */
 void displayInotifyEvent(struct inotify_event *i, inotify_t *head) {
   char buf[1024];
