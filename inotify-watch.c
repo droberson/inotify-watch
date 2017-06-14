@@ -7,10 +7,7 @@
  * The Linux Programming Interface book helped a lot with this!!!
  *
  * TODO:
- * - fork()
- * - list of files to watch
- * - PID file/PID file script
- * - syslog()
+ * - PID file script
  */
 
 #include <sys/inotify.h>
@@ -44,11 +41,12 @@ typedef struct inotifyEntry {
 
 /* Globals */
 int daemonize = 0;
-int use_syslog = 0;
+int use_syslog = 1;
 inotify_t *head = NULL;
 char *logfile = LOGFILE;
 char *pidfile = PIDFILE;
 char *configfile = CONFIGFILE;
+
 
 /* log_entry() -- adds log entry
  *             -- displays to stdout/stderr if not daemonized
@@ -97,6 +95,7 @@ int log_entry(const char *fmt, ...) {
 void displayInotifyEvent(struct inotify_event *i, inotify_t *head) {
   char buf[1024];
   char int2str[32];
+  char *mask;
   inotify_t *current = head;
 
 
@@ -104,47 +103,37 @@ void displayInotifyEvent(struct inotify_event *i, inotify_t *head) {
   while(current->wd != i->wd)
     current = current->next;
 
+  if (i->mask & IN_ACCESS)        mask = "IN_ACCESS";
+  if (i->mask & IN_ATTRIB)        mask = "IN_ATTRIB";
+  if (i->mask & IN_CLOSE_NOWRITE) mask = "IN_CLOSE_NOWRITE";
+  if (i->mask & IN_CLOSE_WRITE)   mask = "IN_CLOSE_WRITE";
+  if (i->mask & IN_CREATE)        mask = "IN_CREATE";
+  if (i->mask & IN_DELETE)        mask = "IN_DELETE";
+  if (i->mask & IN_DELETE_SELF)   mask = "IN_DELETE_SELF";
+  if (i->mask & IN_IGNORED)       mask = "IN_IGNORED";
+  if (i->mask & IN_ISDIR)         mask = "IN_ISDIR";
+  if (i->mask & IN_MODIFY)        mask = "IN_MODIFY";
+  if (i->mask & IN_MOVE_SELF)     mask = "IN_MOVE_SELF";
+  if (i->mask & IN_MOVED_FROM)    mask = "IN_MOVED_FROM";
+  if (i->mask & IN_MOVED_TO)      mask = "IN_MOVED_TO";
+  if (i->mask & IN_OPEN)          mask = "IN_OPEN";
+  if (i->mask & IN_Q_OVERFLOW)    mask = "IN_Q_OVERFLOW";
+  if (i->mask & IN_UNMOUNT)       mask = "IN_UNMOUNT";
+
   /* log_entry("%s", current->filename); */
-  snprintf(buf, sizeof(buf), "%s", current->filename);
-
-  if (i->len > 0) {
-    strncat(buf, "/", sizeof(buf));
-    strncat(buf, i->name, sizeof(buf));
-  }
-
-  strncat(buf, "; ", sizeof(buf));
-
-  /* print watch descriptor */
-  strncat(buf, "wd =", sizeof(buf));
-  snprintf(int2str, sizeof(int2str), "%2d", i->wd);
-  strncat(buf, int2str, sizeof(buf));
-  strncat(buf, "; ", sizeof(buf));
-
-  if (i->cookie > 0) {
-    strncat(buf, "cookie =", sizeof(buf));
+  if (i->cookie > 0)
     snprintf(int2str, sizeof(int2str), "%4d", i->cookie);
-    strncat(buf, int2str, sizeof(buf));
-    strncat(buf, "; ", sizeof(buf));
-  }
 
-  /* print event type */
-  if (i->mask & IN_ACCESS)        strncat(buf, "IN_ACCESS", sizeof(buf));
-  if (i->mask & IN_ATTRIB)        strncat(buf, "IN_ATTRIB", sizeof(buf));
-  if (i->mask & IN_CLOSE_NOWRITE) strncat(buf, "IN_CLOSE_NOWRITE", sizeof(buf));
-  if (i->mask & IN_CLOSE_WRITE)   strncat(buf, "IN_CLOSE_WRITE", sizeof(buf));
-  if (i->mask & IN_CREATE)        strncat(buf, "IN_CREATE", sizeof(buf));
-  if (i->mask & IN_DELETE)        strncat(buf, "IN_DELETE", sizeof(buf));
-  if (i->mask & IN_DELETE_SELF)   strncat(buf, "IN_DELETE_SELF", sizeof(buf));
-  if (i->mask & IN_IGNORED)       strncat(buf, "IN_IGNORED", sizeof(buf));
-  if (i->mask & IN_ISDIR)         strncat(buf, "IN_ISDIR", sizeof(buf));
-  if (i->mask & IN_MODIFY)        strncat(buf, "IN_MODIFY", sizeof(buf));
-  if (i->mask & IN_MOVE_SELF)     strncat(buf, "IN_MOVE_SELF", sizeof(buf));
-  if (i->mask & IN_MOVED_FROM)    strncat(buf, "IN_MOVED_FROM", sizeof(buf));
-  if (i->mask & IN_MOVED_TO)      strncat(buf, "IN_MOVED_TO", sizeof(buf));
-  if (i->mask & IN_OPEN)          strncat(buf, "IN_OPEN", sizeof(buf));
-  if (i->mask & IN_Q_OVERFLOW)    strncat(buf, "IN_Q_OVERFLOW", sizeof(buf));
-  if (i->mask & IN_UNMOUNT)       strncat(buf, "IN_UNMOUNT", sizeof(buf));
-  
+  snprintf(buf, sizeof(buf), "%s%s%s; wd =%2d; %s%s%s%s",
+	   current->filename,
+	   (i->len > 0) ? "/" : "",
+	   (i->len > 0) ? i->name : "",
+	   i->wd,
+	   (i->cookie > 0) ? "cookie =" : "",
+	   (i->cookie > 0) ? int2str : "",
+	   (i->cookie > 0) ? "; " : "",
+	   mask);
+
   log_entry("%s", buf);
 }
 
@@ -211,7 +200,7 @@ void addInotifyFiles(int fd, const char *path) {
     if (wd == -1) {
       fprintf(stderr, "inotify_add_watch %s: %s\n", hmm, strerror(errno));
     }
-    printf("adding %s %d\n", hmm, wd);
+
     addInotifyEntry(wd, hmm);
   }
 
@@ -229,6 +218,7 @@ int main(int argc, char *argv[]) {
   size_t num;
   char buf[BUF_LEN];
   char *p;
+  pid_t pid;
   struct inotify_event *event;
 
 
@@ -262,6 +252,31 @@ int main(int argc, char *argv[]) {
       usage(argv[0]);
     }
   }
+
+  printf("%d\n", use_syslog);
+
+  if (daemonize == 1) {
+    pid = fork();
+    if (pid < 0) {
+      log_entry("FATAL: fork(): %s\n", strerror(errno));
+      exit(EXIT_FAILURE);
+    }
+
+    else if (pid > 0) {
+      writePidFile(pidfile, pid);
+      exit(EXIT_SUCCESS);
+    }
+
+    printf("inotify-watch %s by %s started. PID %d",
+	   VERSION,
+	   AUTHOR,
+	   getpid());
+  }
+
+  log_entry("inotify-watch %s by %s started. PID %d",
+	    VERSION,
+	    AUTHOR,
+	    getpid());
 
   fd = inotify_init();
   if (fd == -1) {
