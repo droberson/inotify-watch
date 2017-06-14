@@ -253,8 +253,6 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  printf("%d\n", use_syslog);
-
   if (daemonize == 1) {
     pid = fork();
     if (pid < 0) {
@@ -267,13 +265,13 @@ int main(int argc, char *argv[]) {
       exit(EXIT_SUCCESS);
     }
 
-    printf("inotify-watch %s by %s started. PID %d",
+    printf("inotify-watch %s by %s started. PID %d\n",
 	   VERSION,
 	   AUTHOR,
 	   getpid());
   }
 
-  log_entry("inotify-watch %s by %s started. PID %d",
+  log_entry("inotify-watch %s by %s started. PID %d\n",
 	    VERSION,
 	    AUTHOR,
 	    getpid());
