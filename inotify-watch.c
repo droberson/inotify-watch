@@ -103,6 +103,7 @@ void displayInotifyEvent(struct inotify_event *i, inotify_t *head) {
   while(current->wd != i->wd)
     current = current->next;
 
+  /* TODO: check if more than one event per mask ever happens */
   if (i->mask & IN_ACCESS)        mask = "IN_ACCESS";
   if (i->mask & IN_ATTRIB)        mask = "IN_ATTRIB";
   if (i->mask & IN_CLOSE_NOWRITE) mask = "IN_CLOSE_NOWRITE";
