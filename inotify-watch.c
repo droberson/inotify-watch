@@ -121,7 +121,6 @@ void displayInotifyEvent(struct inotify_event *i, inotify_t *head) {
   if (i->mask & IN_Q_OVERFLOW)    mask = "IN_Q_OVERFLOW";
   if (i->mask & IN_UNMOUNT)       mask = "IN_UNMOUNT";
 
-  /* log_entry("%s", current->filename); */
   if (i->cookie > 0)
     snprintf(int2str, sizeof(int2str), "%4d", i->cookie);
 
