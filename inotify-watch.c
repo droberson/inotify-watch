@@ -167,7 +167,16 @@ void writePidFile(char *path, pid_t pid) {
 /* usage() -- print usage/help menu
  */
 void usage(const char *progname) {
-  fprintf(stderr, "print usage");
+  fprintf(stderr, "usage: %s [-f <file>] [-l <file>] [-p <file>] [-sdh?]\n",
+	  progname);
+  fprintf(stderr, "  -f <file> -- Config file. Default: %s\n", configfile);
+  fprintf(stderr, "  -l <file> -- Log file. Default: %s\n", logfile);
+  fprintf(stderr, "  -p <file> -- PID file. Default: %s\n", pidfile);
+  fprintf(stderr, "  -s        -- Toggles syslog usage. Default: %s\n",
+	  use_syslog ? "yes" : "no");
+  fprintf(stderr, "  -d        -- Daemonize. Default: %s\n",
+	  daemonize ? "yes" : "no");
+  fprintf(stderr, "  -h/-?     -- This help menu.\n");
 
   exit(EXIT_FAILURE);
 }
