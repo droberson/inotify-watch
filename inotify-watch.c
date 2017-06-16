@@ -7,7 +7,7 @@
  * The Linux Programming Interface book helped a lot with this!!!
  *
  * TODO:
- * - PID file script
+ * - atexit() and signal handlers to alert if this gets killed
  */
 
 #include <sys/inotify.h>
