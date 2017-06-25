@@ -52,7 +52,6 @@ char		*configfile = CONFIGFILE;
  *             -- returns 0 on success, 1 on failure
  */
 int log_entry(const char *fmt, ...) {
-  int		n;
   FILE		*fp;
   va_list	va;
   char		buf[1024];
@@ -218,8 +217,6 @@ void addInotifyFiles(int fd, const char *path) {
  */
 int main(int argc, char *argv[]) {
   int			fd;
-  int			wd;
-  int			i;
   int			opt;
   size_t		num;
   char			buf[BUF_LEN];
