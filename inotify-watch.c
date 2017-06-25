@@ -4,13 +4,11 @@
  *  by Daniel Roberson @dmfroberson
  *
  * The Linux Programming Interface book helped a lot with this!!!
- *
- * TODO:
- * - atexit() and signal handlers to alert if this gets killed
  */
 
 #include <sys/inotify.h>
 #include <sys/types.h>
+#include <signal.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdarg.h>
@@ -213,6 +211,21 @@ void addInotifyFiles(int fd, const char *path) {
 }
 
 
+/* exit_routine() -- atexit() function
+ */
+void exit_routine(void) {
+  log_entry("inotify-watch exiting.");
+}
+
+
+/* sigint_handler() -- handler for SIGINT
+ */
+void sigint_handler(int signal) {
+  log_entry("inotify-watch caught SIGINT.\n");
+  exit(EXIT_FAILURE);
+}
+
+
 /* main() -- entry point of this program
  */
 int main(int argc, char *argv[]) {
@@ -255,6 +268,12 @@ int main(int argc, char *argv[]) {
       usage(argv[0]);
     }
   }
+
+  if (atexit(exit_routine) != 0) {
+    log_entry("FATAL: unable to set atexit() handler\n");
+  }
+
+  signal(SIGINT, sigint_handler);
 
   if (daemonize == 1) {
     pid = fork();
