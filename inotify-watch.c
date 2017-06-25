@@ -32,19 +32,19 @@
  * filename - self-explanatory
  */
 typedef struct inotifyEntry {
-  int wd;
-  char filename[BUF_LEN];
-  struct inotifyEntry *next;
+  int			wd;
+  char			filename[BUF_LEN];
+  struct inotifyEntry	*next;
 } inotify_t;
 
 
 /* Globals */
-int daemonize = 0;
-int use_syslog = 1;
-inotify_t *head = NULL;
-char *logfile = LOGFILE;
-char *pidfile = PIDFILE;
-char *configfile = CONFIGFILE;
+int		daemonize = 0;
+int		use_syslog = 1;
+inotify_t	*head = NULL;
+char		*logfile = LOGFILE;
+char		*pidfile = PIDFILE;
+char		*configfile = CONFIGFILE;
 
 
 /* log_entry() -- adds log entry
@@ -52,12 +52,12 @@ char *configfile = CONFIGFILE;
  *             -- returns 0 on success, 1 on failure
  */
 int log_entry(const char *fmt, ...) {
-  int n;
-  FILE *fp;
-  va_list va;
-  char buf[1024];
-  char *timestr;
-  time_t t;
+  int		n;
+  FILE		*fp;
+  va_list	va;
+  char		buf[1024];
+  char		*timestr;
+  time_t	t;
 
 
   /* print timestamp */
@@ -90,10 +90,10 @@ int log_entry(const char *fmt, ...) {
 /* displayInotifyEvent() -- output inotify event in human-readable form
  */
 void displayInotifyEvent(struct inotify_event *i, inotify_t *head) {
-  char buf[1024];
-  char int2str[32];
-  char *mask;
-  inotify_t *current = head;
+  char		buf[1024];
+  char		int2str[32];
+  char		*mask;
+  inotify_t	*current = head;
 
 
   /* print filename */
@@ -138,7 +138,7 @@ void displayInotifyEvent(struct inotify_event *i, inotify_t *head) {
 /* addInotifyEntry -- adds wd/filename pair to linked list for future reference
  */
 void addInotifyEntry(int wd, char *filename) {
-  inotify_t *link = (inotify_t*)malloc(sizeof(inotify_t));
+  inotify_t	*link = (inotify_t*)malloc(sizeof(inotify_t));
 
   link->wd = wd;
   strncpy(link->filename, filename, sizeof(link->filename));
@@ -150,7 +150,7 @@ void addInotifyEntry(int wd, char *filename) {
 /* writePidFile() -- writes pid file!
  */
 void writePidFile(char *path, pid_t pid) {
-  FILE *fp;
+  FILE	*fp;
 
   fp = fopen(path, "w");
   if (fp == NULL) {
@@ -184,9 +184,9 @@ void usage(const char *progname) {
 /* addInotifyFiles() -- read filenames from config file and add to inotify
  */
 void addInotifyFiles(int fd, const char *path) {
-  int wd;
-  FILE *fp;
-  char hmm[BUF_LEN];
+  int	wd;
+  FILE	*fp;
+  char	hmm[BUF_LEN];
 
 
   fp = fopen(path, "r");
@@ -217,15 +217,15 @@ void addInotifyFiles(int fd, const char *path) {
 /* main() -- entry point of this program
  */
 int main(int argc, char *argv[]) {
-  int fd;
-  int wd;
-  int i;
-  int opt;
-  size_t num;
-  char buf[BUF_LEN];
-  char *p;
-  pid_t pid;
-  struct inotify_event *event;
+  int			fd;
+  int			wd;
+  int			i;
+  int			opt;
+  size_t		num;
+  char			buf[BUF_LEN];
+  char			*p;
+  pid_t			pid;
+  struct inotify_event	*event;
 
 
   while ((opt = getopt(argc, argv, "h?sl:f:p:d")) != -1) {
