@@ -66,7 +66,7 @@ int log_entry(const char *fmt, ...) {
   va_end(va);
 
   if (use_syslog)
-    syslog(LOG_INFO, "[%s] %s", timestr, buf);
+    syslog(LOG_INFO, "%s", buf);
 
   if ((fp = fopen(logfile, "a+")) == NULL) {
     fprintf (stderr, "Unable to open logfile %s: %s\n",
