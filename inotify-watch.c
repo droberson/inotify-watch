@@ -4,10 +4,19 @@
  *  by Daniel Roberson @dmfroberson
  *
  * The Linux Programming Interface book helped a lot with this!!!
+ *
+ * TODO:
+ * - server to database log entries
+ * - scripts to snapshot a system
+ * - general cleanup
+ * - uid/gid function wrappers
  */
 
 #include <sys/inotify.h>
 #include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <fuzzy.h>
 #include <signal.h>
 #include <limits.h>
 #include <stdio.h>
@@ -17,7 +26,10 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
+#include <pwd.h>
+#include <grp.h>
 #include <time.h>
+#include <linux/limits.h>
 
 #include "inotify-watch.h"
 
@@ -43,6 +55,48 @@ inotify_t	*head = NULL;
 char		*logfile = LOGFILE;
 char		*pidfile = PIDFILE;
 char		*configfile = CONFIGFILE;
+
+
+/* addInotifyEntry -- adds wd/filename pair to linked list
+ */
+void addInotifyEntry(int wd, char *filename) {
+  inotify_t	*link = (inotify_t*)malloc(sizeof(inotify_t));
+
+  link->wd = wd;
+  strncpy(link->filename, filename, sizeof(link->filename));
+
+  link->next = head;
+  head = link;
+}
+
+
+/* removeInotifyEntry -- removes wd/filename pair from linked list
+ */
+void removeInotifyEntry(int wd) {
+  inotify_t	*search;
+  inotify_t	*match;
+
+  search = head;
+
+  if (search->wd == wd) {
+    head = search->next;
+    free(search);
+    return;
+  }
+
+  while (search->next) {
+    if (search->next->wd == wd) {
+      match = search->next;
+
+      search->next = search->next->next;
+      free(match);
+
+      break;
+    }
+
+    search = search->next;
+  }
+}
 
 
 /* log_entry() -- adds log entry
@@ -84,65 +138,153 @@ int log_entry(const char *fmt, ...) {
   return 0;
 }
 
-/* displayInotifyEvent() -- output inotify event in human-readable form
+
+/* addInotifyFiles() -- read filenames from config file and add to inotify
  */
-void displayInotifyEvent(struct inotify_event *i, inotify_t *head) {
-  char		buf[1024];
+void addInotifyFiles(int fd, const char *path) {
+  int	wd;
+  FILE	*fp;
+  char	buf[BUF_LEN];
+
+
+  fp = fopen(path, "r");
+  if (fp == NULL) {
+    log_entry("FATAL: Unable to open config file %s: %s\n",
+	      path,
+	      strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  while (fgets(buf, sizeof(buf), fp) != NULL) {
+    buf[strcspn(buf, "\n")] = '\0';
+    if (strlen(buf) == 0)
+      continue;
+
+    wd = inotify_add_watch(fd, buf, IN_ALL_EVENTS);
+    if (wd == -1) {
+      fprintf(stderr, "inotify_add_watch %s: %s\n", buf, strerror(errno));
+    } else {
+      addInotifyEntry(wd, buf);
+    }
+  }
+
+  fclose(fp);
+}
+
+
+/* processInotifyEvent() -- process inotify event
+ */
+void processInotifyEvent(int fd, struct inotify_event *i, inotify_t *head) {
+  int		wd;
+  int		found;
+  char		output[1024];
   char		int2str[32];
   char		*mask;
+  char		path[PATH_MAX];
+  char		permstr[4];
   inotify_t	*current = head;
+  inotify_t	*search;
+  int		hash = 0, get_permissions = 0, check_dir = 0, remove = 0;
+  struct stat	s;
+  struct passwd	*pwent;
+  struct group	*g;
+  char		hashstr[FUZZY_MAX_RESULT];
 
 
   /* print filename */
   while(current->wd != i->wd)
     current = current->next;
 
-  /* TODO: check if more than one event per mask ever happens */
-  if (i->mask & IN_ACCESS)        mask = "IN_ACCESS";
-  if (i->mask & IN_ATTRIB)        mask = "IN_ATTRIB";
-  if (i->mask & IN_CLOSE_NOWRITE) mask = "IN_CLOSE_NOWRITE";
-  if (i->mask & IN_CLOSE_WRITE)   mask = "IN_CLOSE_WRITE";
-  if (i->mask & IN_CREATE)        mask = "IN_CREATE";
-  if (i->mask & IN_DELETE)        mask = "IN_DELETE";
-  if (i->mask & IN_DELETE_SELF)   mask = "IN_DELETE_SELF";
-  if (i->mask & IN_IGNORED)       mask = "IN_IGNORED";
-  if (i->mask & IN_ISDIR)         mask = "IN_ISDIR";
-  if (i->mask & IN_MODIFY)        mask = "IN_MODIFY";
-  if (i->mask & IN_MOVE_SELF)     mask = "IN_MOVE_SELF";
-  if (i->mask & IN_MOVED_FROM)    mask = "IN_MOVED_FROM";
-  if (i->mask & IN_MOVED_TO)      mask = "IN_MOVED_TO";
-  if (i->mask & IN_OPEN)          mask = "IN_OPEN";
-  if (i->mask & IN_Q_OVERFLOW)    mask = "IN_Q_OVERFLOW";
-  if (i->mask & IN_UNMOUNT)       mask = "IN_UNMOUNT";
+  /* TODO: make this not look like #1 bullshit */
+  if (i->mask & IN_ACCESS)          mask = "IN_ACCESS";
+  if (i->mask & IN_ATTRIB)        { mask = "IN_ATTRIB"; get_permissions = 1; }
+  if (i->mask & IN_CLOSE_NOWRITE)   mask = "IN_CLOSE_NOWRITE";
+  if (i->mask & IN_CLOSE_WRITE)   { mask = "IN_CLOSE_WRITE"; hash = 1; }
+  if (i->mask & IN_CREATE)        { mask = "IN_CREATE"; get_permissions = 1; }
+  if (i->mask & IN_DELETE)          mask = "IN_DELETE";
+  if (i->mask & IN_DELETE_SELF)     mask = "IN_DELETE_SELF";
+  if (i->mask & IN_IGNORED)       { mask = "IN_IGNORED"; remove = 1; }
+  if (i->mask & IN_ISDIR)         { mask = "IN_ISDIR"; check_dir = 1; }
+  if (i->mask & IN_MODIFY)        { mask = "IN_MODIFY"; hash = 1; }
+  if (i->mask & IN_MOVE_SELF)       mask = "IN_MOVE_SELF";
+  if (i->mask & IN_MOVED_FROM)      mask = "IN_MOVED_FROM";
+  if (i->mask & IN_MOVED_TO)        mask = "IN_MOVED_TO";
+  if (i->mask & IN_OPEN)          { mask = "IN_OPEN"; get_permissions = 1; }
+  if (i->mask & IN_Q_OVERFLOW)      mask = "IN_Q_OVERFLOW";
+  if (i->mask & IN_UNMOUNT)         mask = "IN_UNMOUNT";
 
   if (i->cookie > 0)
     snprintf(int2str, sizeof(int2str), "%4d", i->cookie);
 
-  snprintf(buf, sizeof(buf), "%s%s%s; wd =%2d; %s%s%s%s",
+  /* Store full path of file */
+  snprintf(path, sizeof(path), "%s%s%s",
 	   current->filename,
 	   (i->len > 0) ? "/" : "",
-	   (i->len > 0) ? i->name : "",
+	   (i->len > 0) ? i->name : "");
+
+  if (remove)
+    removeInotifyEntry(i->wd);
+
+  if (check_dir) {
+    search = head;
+
+    /* Search linked list for directory*/
+    for (found = 0; search->next; search = search->next) {
+      if (strcmp(search->filename, path) == 0) {
+	found = search->wd;
+	break;
+      }
+    }
+
+    /* Directory doesn't exist in linked list. Add it. */
+    if (found == 0) {
+      if (stat(path, &s) == 0) {
+	wd = inotify_add_watch(fd, path, IN_ALL_EVENTS);
+	if (wd == -1) {
+	  fprintf(stderr, "inotify_add_watch %s: %s\n", path, strerror(errno));
+	} else {
+	  log_entry("Adding new directory: wd = %d ; path = %s", wd, path);
+	  addInotifyEntry(wd, path);
+	}
+      }
+    }
+  }
+
+  /* Populate stat, passwd, and group structures */
+  if (get_permissions) {
+    if (stat(path, &s) == 0) {
+      pwent = getpwuid(s.st_uid);
+      g = getgrgid(s.st_gid);
+      sprintf(permstr, "%o", s.st_mode);
+    }
+  }
+
+  /* Get ssdeep hash of file */
+  if (hash)
+    if (fuzzy_hash_filename(path, hashstr) != 0)
+      sprintf(hashstr, "%s", "ERROR");
+
+  /* Create meaningful output string */
+  snprintf(output, sizeof(output), "%s; wd =%2d; %s%s%s%s%s%s%s%s%s%s%s%s",
+	   path,
 	   i->wd,
 	   (i->cookie > 0) ? "cookie =" : "",
 	   (i->cookie > 0) ? int2str : "",
 	   (i->cookie > 0) ? "; " : "",
-	   mask);
+	   mask,
+	   get_permissions || hash ? "; " : "",
+	   get_permissions || hash ? pwent->pw_name : "",
+	   get_permissions || hash ? ":" : "",
+	   get_permissions || hash ? g->gr_name : "",
+	   get_permissions ? "; perm = " : "",
+	   get_permissions ? permstr : "",
+	   hash ? " ; hash = " : "",
+	   hash ? hashstr : "");
 
-  log_entry("%s", buf);
+  log_entry("%s", output);
+  /* TODO: send data to server */
 }
 
-
-/* addInotifyEntry -- adds wd/filename pair to linked list for future reference
- */
-void addInotifyEntry(int wd, char *filename) {
-  inotify_t	*link = (inotify_t*)malloc(sizeof(inotify_t));
-
-  link->wd = wd;
-  strncpy(link->filename, filename, sizeof(link->filename));
-
-  link->next = head;
-  head = link;
-}
 
 /* writePidFile() -- writes pid file!
  */
@@ -175,39 +317,6 @@ void usage(const char *progname) {
   fprintf(stderr, "  -h/-?     -- This help menu.\n");
 
   exit(EXIT_FAILURE);
-}
-
-
-/* addInotifyFiles() -- read filenames from config file and add to inotify
- */
-void addInotifyFiles(int fd, const char *path) {
-  int	wd;
-  FILE	*fp;
-  char	hmm[BUF_LEN];
-
-
-  fp = fopen(path, "r");
-  if (fp == NULL) {
-    log_entry("FATAL: Unable to open config file %s: %s\n",
-	      path,
-	      strerror(errno));
-    exit(EXIT_FAILURE);
-  }
-
-  while (fgets(hmm, sizeof(hmm), fp) != NULL) {
-    hmm[strcspn(hmm, "\n")] = '\0';
-    if (strlen(hmm) == 0)
-      continue;
-
-    wd = inotify_add_watch(fd, hmm, IN_ALL_EVENTS);
-    if (wd == -1) {
-      fprintf(stderr, "inotify_add_watch %s: %s\n", hmm, strerror(errno));
-    }
-
-    addInotifyEntry(wd, hmm);
-  }
-
-  fclose(fp);
 }
 
 
@@ -306,6 +415,7 @@ int main(int argc, char *argv[]) {
 
   addInotifyFiles(fd, configfile);
 
+  /* main loop() */
   for(;;) {
     num = read(fd, buf, BUF_LEN);
     if (num == 0 || num == -1) {
@@ -315,7 +425,7 @@ int main(int argc, char *argv[]) {
 
     for (p = buf; p < buf + num;) {
       event = (struct inotify_event *) p;
-      displayInotifyEvent(event, head);
+      processInotifyEvent(fd, event, head);
 
       p += sizeof(struct inotify_event) + event->len;
     }
